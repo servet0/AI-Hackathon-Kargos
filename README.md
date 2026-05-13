@@ -1,5 +1,7 @@
 # Kargos 📦 - AI Destekli Lojistik ve Kargo Otomasyonu
 
+https://github.com/user-attachments/assets/76b5f3da-38ab-4313-9fc9-0835f5f7eb91
+
 **Kargos**, KOBİ'lere yönelik kargo ve sipariş yönetim süreçlerini yapay zeka ile otomatize etmek için geliştirilmiş güçlü bir SaaS prototipidir. 
 
 Hackathon standartlarına uygun olarak tasarlanan bu proje, son kullanıcıların kargo durumlarını **doğal dille sohbet ederek** öğrenmesini sağlayan, aşırı hızlı (Groq API tabanlı) ve esnek bir **Yapay Zeka Müşteri Temsilcisi (AI Agent)** içerir.
