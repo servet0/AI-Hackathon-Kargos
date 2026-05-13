@@ -2,7 +2,7 @@
 Yapay Zeka Ajanı Servisi.
 
 Müşteri mesajlarını analiz ederek sipariş takip bilgisi sağlar.
-Google Gemini API kullanarak doğal dil anlama ve yanıt üretme yapar.
+Groq API kullanarak doğal dil anlama ve yanıt üretme yapar.
 
 Akış:
   1. Kullanıcı mesajından sipariş numarası/ID çıkarılır (LLM veya regex).
@@ -17,12 +17,14 @@ import os
 import re
 from dataclasses import dataclass
 
-import google.generativeai as genai
+from groq import AsyncGroq
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
 
 from app.crud.orders import OrderCRUD
 from app.models.order import Order
 
+load_dotenv()
 logger = logging.getLogger(__name__)
 
 
@@ -46,35 +48,29 @@ Yanıtını SADECE aşağıdaki JSON formatında ver, başka bir şey yazma:
 """
 
 RESPONSE_SYSTEM_PROMPT = """\
-Sen "Kargos" lojistik platformunun müşteri destek asistanısın. Adın: Kargos Asistan.
+Sen Kargos şirketinin kibar ve yardımsever yapay zeka müşteri temsilcisisin.
+Amacın müşterilerle doğal bir şekilde iletişim kurmak ve kargo/sipariş süreçlerinde yardımcı olmak.
 
-Kişiliğin:
-- Kibar, profesyonel ve yardımsever
-- Türkçe konuş
-- Emojiler kullanabilirsin ama abartma
-- Kısa ve öz yanıtlar ver
-
-Kargo durumlarına göre davranışın:
-- "Hazırlanıyor": Siparişin hazırlandığını belirt, sabır dile
-- "Kargoya Verildi": Takip numarasını paylaş, kargo firmasından takip \
-edilebileceğini söyle
-- "Gecikmede": Özür dile, durumun takip edildiğini belirt, en kısa sürede \
-çözüleceğini söyle\
+Kullanıcının sipariş bilgilerini veritabanından aldık, aşağıda göreceksin.
+Bu bilgileri kullanarak kullanıcıya doğal, akıcı ve kibar bir yanıt ver.
+Sadece robotik bilgi sunma, müşterinin sohbetine de (varsa) doğal bir karşılık ver.
 """
 
-NO_ORDER_SYSTEM_PROMPT = """\
-Sen "Kargos" lojistik platformunun müşteri destek asistanısın. Adın: Kargos Asistan.
-Kullanıcı sipariş numarası vermeden sana yazdı.
-Kibarca sipariş numarasını veya sipariş ID'sini sor.
-Sipariş numarasının genellikle "SIP-" ile başladığını veya sayısal bir ID \
-olduğunu belirt. Türkçe yanıt ver, kısa ve samimi ol.\
+GENERAL_CHAT_SYSTEM_PROMPT = """\
+Sen Kargos şirketinin kibar ve yardımsever yapay zeka müşteri temsilcisisin.
+Amacın müşterilerle doğal bir şekilde iletişim kurmak ve kargo/sipariş süreçlerinde yardımcı olmak.
+
+Eğer kullanıcı sana "Merhaba", "Nasılsın", "Kimsin" gibi günlük sohbet kelimeleriyle gelirse,
+buna uygun, doğal ve akıcı bir şekilde yanıt ver (Örn: 'Merhaba! Ben Kargos asistanıyım, size kargo takibi konusunda nasıl yardımcı olabilirim?').
+Eğer kullanıcı kargosunu soruyorsa ama sipariş numarası vermediyse, kibarca numarasını (Örn: SIP-1234) iste.
 """
 
 ORDER_NOT_FOUND_SYSTEM_PROMPT = """\
-Sen "Kargos" lojistik platformunun müşteri destek asistanısın.
-Kullanıcı bir sipariş numarası/ID verdi ama sistemde bulunamadı.
-Kibarca bilgiyi kontrol etmesini iste. Sipariş onay e-postasında \
-doğru numarayı bulabileceğini hatırlat. Türkçe yanıt ver.\
+Sen Kargos şirketinin kibar ve yardımsever yapay zeka müşteri temsilcisisin.
+Amacın müşterilerle doğal bir şekilde iletişim kurmak ve kargo/sipariş süreçlerinde yardımcı olmak.
+
+Kullanıcı bir sipariş numarası veya ID verdi ama sistemde bulamadık.
+Kibarca bilgiyi kontrol etmesini iste. Sipariş onay e-postasında doğru numarayı bulabileceğini hatırlat.
 """
 
 
@@ -106,24 +102,23 @@ class AIAgent:
     Müşteri mesajlarını analiz eder, sipariş bilgilerini veritabanından
     çeker ve doğal dilde yanıt üretir.
 
-    Gemini API anahtarı ayarlanmamışsa regex + şablon tabanlı fallback
+    Groq API anahtarı ayarlanmamışsa regex + şablon tabanlı fallback
     modunda çalışır (geliştirme/test ortamları için).
     """
 
     def __init__(self) -> None:
-        self._api_key = os.getenv("GEMINI_API_KEY")
-        self._model_name = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
-        self._model: genai.GenerativeModel | None = None
+        self._api_key = os.getenv("GROQ_API_KEY")
+        self._model_name = os.getenv(
+            "GROQ_MODEL", "llama-3.1-8b-instant"
+        )
+        self._client: AsyncGroq | None = None
 
-        if self._api_key:
-            genai.configure(api_key=self._api_key)
-            self._model = genai.GenerativeModel(self._model_name)
-            logger.info(
-                "Gemini API yapılandırıldı (model: %s)", self._model_name
-            )
+        if self._api_key and self._api_key.startswith("gsk_"):
+            self._client = AsyncGroq(api_key=self._api_key)
+            logger.info("Groq API yapılandırıldı (model: %s)", self._model_name)
         else:
             logger.warning(
-                "GEMINI_API_KEY ayarlanmamış. "
+                "Geçerli bir GROQ_API_KEY ayarlanmamış. "
                 "AI Agent fallback (regex + şablon) modunda çalışacak."
             )
 
@@ -131,8 +126,8 @@ class AIAgent:
 
     @property
     def is_llm_available(self) -> bool:
-        """Gemini API kullanılabilir mi?"""
-        return self._model is not None
+        """Groq API kullanılabilir mi?"""
+        return self._client is not None
 
     async def process_message(self, message: str, db: Session) -> str:
         """
@@ -148,9 +143,9 @@ class AIAgent:
         # 1) Mesajdan sipariş bilgisini çıkar
         extracted = await self._extract_order_info(message)
 
-        # 2) Sipariş bilgisi yoksa kibarca sor
+        # 2) Sipariş bilgisi yoksa genel sohbet veya numara isteme yanıtı üret
         if not extracted.has_info:
-            return await self._generate_no_order_response(message)
+            return await self._generate_general_response(message)
 
         # 3) Veritabanında sipariş ara
         order = self._find_order(db, extracted)
@@ -173,25 +168,19 @@ class AIAgent:
         return self._extract_with_regex(message)
 
     async def _extract_with_llm(self, message: str) -> ExtractedOrderInfo:
-        """Gemini kullanarak sipariş bilgisini çıkar."""
+        """Groq kullanarak sipariş bilgisini çıkar."""
         try:
-            response = await self._model.generate_content_async(
-                [
-                    {
-                        "role": "user",
-                        "parts": [
-                            f"Sistem talimatı: {EXTRACT_SYSTEM_PROMPT}\n\n"
-                            f"Kullanıcı mesajı: {message}"
-                        ],
-                    },
+            response = await self._client.chat.completions.create(
+                model=self._model_name,
+                messages=[
+                    {"role": "system", "content": EXTRACT_SYSTEM_PROMPT},
+                    {"role": "user", "content": message},
                 ],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.0,
-                    max_output_tokens=200,
-                ),
+                max_tokens=200,
+                temperature=0.01,
             )
 
-            raw = response.text.strip()
+            raw = response.choices[0].message.content.strip()
 
             # JSON bloğunu temizle (LLM bazen ```json ... ``` sarar)
             if raw.startswith("```"):
@@ -215,7 +204,7 @@ class AIAgent:
             return self._extract_with_regex(message)
 
         except Exception as exc:
-            logger.error("Gemini API hatası (extract): %s", exc)
+            logger.error("Groq API hatası (extract): %s", exc)
             return self._extract_with_regex(message)
 
     @staticmethod
@@ -287,19 +276,17 @@ class AIAgent:
 
         return self._template_order_response(order)
 
-    async def _generate_no_order_response(self, message: str) -> str:
-        """Sipariş numarası verilmediğinde kibarca sor."""
+    async def _generate_general_response(self, message: str) -> str:
+        """Kullanıcı genel bir mesaj attığında veya numara vermediğinde doğal yanıt üret."""
         if self.is_llm_available:
             return await self._call_llm(
-                system=NO_ORDER_SYSTEM_PROMPT,
+                system=GENERAL_CHAT_SYSTEM_PROMPT,
                 user_message=f"Müşteri mesajı: {message}",
             )
 
         return (
-            "Merhaba! 👋 Size yardımcı olabilmem için sipariş numaranıza "
-            "ihtiyacım var. Sipariş numaranız genellikle 'SIP-' ile başlar "
-            "(örn: SIP-2026-0001) veya sayısal bir ID olabilir. "
-            "Lütfen sipariş numaranızı paylaşır mısınız?"
+            "Merhaba! 👋 Ben Kargos asistanıyım. Size yardımcı olabilmem için sipariş numaranıza "
+            "ihtiyacım var. Lütfen sipariş numaranızı (Örn: SIP-2026-0001) paylaşır mısınız?"
         )
 
     async def _generate_not_found_response(
@@ -328,26 +315,21 @@ class AIAgent:
     # -- LLM Çağrısı --------------------------------------------------------
 
     async def _call_llm(self, system: str, user_message: str) -> str:
-        """Gemini API'ye istek gönder ve yanıt al."""
+        """Groq API'ye istek gönder ve yanıt al."""
         try:
-            response = await self._model.generate_content_async(
-                [
-                    {
-                        "role": "user",
-                        "parts": [
-                            f"Sistem talimatı: {system}\n\n{user_message}"
-                        ],
-                    },
+            response = await self._client.chat.completions.create(
+                model=self._model_name,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_message},
                 ],
-                generation_config=genai.types.GenerationConfig(
-                    temperature=0.7,
-                    max_output_tokens=500,
-                ),
+                max_tokens=500,
+                temperature=0.7,
             )
-            return response.text.strip()
+            return response.choices[0].message.content.strip()
 
         except Exception as exc:
-            logger.error("Gemini API yanıt üretme hatası: %s", exc)
+            logger.error("Groq API yanıt üretme hatası: %s", exc)
             return (
                 "Şu anda bir teknik sorun yaşıyoruz. "
                 "Lütfen birkaç dakika sonra tekrar deneyin. 🙏"
