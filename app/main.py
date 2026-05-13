@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.database import Base, engine
-from app.routers import orders
+from app.routers import chat, orders
 
 
 @asynccontextmanager
@@ -47,6 +47,7 @@ app.add_middleware(
 
 # Router'ları kaydet
 app.include_router(orders.router, prefix="/api/v1")
+app.include_router(chat.router, prefix="/api/v1")
 
 
 @app.get("/", tags=["Sistem"])
